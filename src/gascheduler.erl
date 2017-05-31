@@ -363,10 +363,10 @@ log_permanent_failure(Type, Error, MFA) ->
 
 
 %% Executes MFA MaxRetries times
--spec execute_do(mfa(), non_neg_integer() | infinity, non_neg_integer()) -> result().
-execute_do(_MFA, 0, _RetryTimeout) ->
+-spec execute_do(mfa(), non_neg_integer() | infinity, non_neg_integer(), task_callback()) -> result().
+execute_do(_MFA, 0, _RetryTimeout, _) ->
   {error, max_retries};
-execute_do(MFA = {Mod, Fun, Args}, infinity, RetryTimeout) ->
+execute_do(MFA = {Mod, Fun, Args}, infinity, RetryTimeout, Callback) ->
   try
     {ok, apply(Mod, Fun, Args)}
   catch
@@ -375,9 +375,9 @@ execute_do(MFA = {Mod, Fun, Args}, infinity, RetryTimeout) ->
       {error, permanent_failure};
     Type:Error ->
       log_retry_wait(Type, Error, MFA, RetryTimeout),
-      execute_do(MFA, infinity, RetryTimeout)
+      execute_do(MFA, infinity, RetryTimeout, Callback)
   end;
-execute_do(MFA = {Mod, Fun, Args}, MaxRetries, RetryTimeout) ->
+execute_do(MFA = {Mod, Fun, Args}, MaxRetries, RetryTimeout, Callback) ->
   try
     {ok, apply(Mod, Fun, Args)}
   catch
@@ -386,13 +386,13 @@ execute_do(MFA = {Mod, Fun, Args}, MaxRetries, RetryTimeout) ->
       {error, permanent_failure};
     Type:Error ->
       log_retry_wait(Type, Error, MFA, RetryTimeout),
-      execute_do(MFA, MaxRetries - 1, RetryTimeout)
+      execute_do(MFA, MaxRetries - 1, RetryTimeout, Callback)
   end.
 
 -spec worker_fun(pid(), mfa(), max_retries(), non_neg_integer(), task_callback()) -> ok.
 worker_fun(Scheduler, MFA, MaxRetries, RetryTimeout, Callback) ->
   Worker = self(),
-  Result = execute_do(MFA, MaxRetries, RetryTimeout),
+  Result = execute_do(MFA, MaxRetries, RetryTimeout, Callback),
   gascheduler:execute_callback(Scheduler, Callback, MFA, Result),
   gascheduler:notify_client(Scheduler, Result, Worker, MFA).
 
@@ -453,6 +453,8 @@ remove_worker(Worker, Running) ->
 
 %% Execute a module function specified after task is done
 -spec execute_callback(pid(), task_callback(), mfa(), result()) -> ok.
+execute_callback(_, {undefined, undefined}, _, _) ->
+  ok;
 execute_callback(Scheduler, {Module, Function}, MFA, Result) ->
   erlang:apply(Module, Function, [Scheduler, MFA, Result]),
   ok.
