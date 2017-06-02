@@ -75,7 +75,10 @@
   ticks :: non_neg_integer(),
 
   %% wait this long before retrying a task on failure
-  retry_timeout :: non_neg_integer()}).
+  retry_timeout :: non_neg_integer(),
+
+  %% Execute a function when the task is done error and success
+  callback :: task_callback()}).
 
 
 %%% API
@@ -141,7 +144,6 @@ notify_client(Scheduler, Result, Worker, MFA) ->
 
 
 %%% gen_server callbacks
-
 init([Nodes, Client, MaxWorkers, MaxRetries]) ->
   process_flag(trap_exit, true),
   ok = net_kernel:monitor_nodes(true),
@@ -156,10 +158,12 @@ init([Nodes, Client, MaxWorkers, MaxRetries]) ->
     ticks         = 0}}.
 
 handle_call({execute, MFA}, _From, State) ->
-  {reply, ok, execute_try(MFA, State)};
+  NewState = State#state{callback = {undefined, undefined}},
+  {reply, ok, execute_try(MFA, NewState)};
 
 handle_call({execute, MFA, Callback}, _From, State) ->
-  {reply, ok, execute_try(MFA, State, Callback)};
+  NewState = State#state{callback = Callback},
+  {reply, ok, execute_try(MFA, NewState)};
 
 handle_call({add_worker_node, Node}, _From, State = #state{nodes = Nodes}) ->
   {Reply, NewNodes} = case net_adm:ping(Node) of
@@ -399,17 +403,13 @@ worker_fun(Scheduler, MFA, MaxRetries, RetryTimeout, Callback) ->
 
 %% Tries to execute MFA, otherwise queues MFA in pending.
 -spec execute_try(mfa(), #state{}) -> #state{}.
-execute_try(MFA, State) ->
-  execute_try(MFA, State, {undefined, undefined}).
-
-%% Tries to execute MFA, otherwise queues MFA in pending.
--spec execute_try(mfa(), #state{}, task_callback()) -> #state{}.
 execute_try(MFA, State = #state{nodes = Nodes,
   pending = Pending,
   running = Running,
   max_workers = MaxWorkers,
   max_retries = MaxRetries,
-  retry_timeout = RetryTimeout}, Callback) ->
+  retry_timeout = RetryTimeout,
+  callback = Callback}) ->
   Scheduler = self(),
   case get_free_node(Nodes, MaxWorkers, Running) of
     undefined ->
